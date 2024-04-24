@@ -1,0 +1,83 @@
+def reportName = "Local Web"
+pipeline {
+    agent any
+    parameters {
+        choice(name: 'Headless', choices: ['true', 'false'], description: '')
+        string(name: 'TagName', defaultValue: '@smoke', description: '')
+        choice(name: 'Browser', choices: ['chrome', 'remote-chrome', 'firefox'], description: '')
+        string(name: 'ThreadCount', defaultValue: '1', description: '')
+        gitParameter name: 'BRANCH_TAG',
+                type: 'PT_BRANCH',
+                defaultValue: 'master',
+                selectedValue: 'DEFAULT',
+                quickFilterEnabled: true,
+                sortMode: 'DESCENDING_SMART',
+                tagFilter: '*',
+                branchFilter: 'origin/(.*)',
+                useRepository: '.*.git',
+                description: 'Select your branch'
+    }
+    stages {
+        stage('Slack Notification') {
+            steps {
+                script{
+                    slackSend(
+                            color: "#7aabcc",
+                            message:":information_source: ${reportName} REGRESSION job has been started at test env. => (<${env.JOB_URL}${BUILD_NUMBER}|Build Link>)"
+                    )}
+            }
+        }
+        stage('Checkout') {
+            steps {
+                checkout([$class                           : 'GitSCM',
+                          branches                         : [[name: "${params.BRANCH_TAG}"]],
+                          doGenerateSubmoduleConfigurations: false,
+                          extensions                       : [],
+                          gitTool                          : 'default',
+                          submoduleCfg                     : [],
+                          userRemoteConfigs                : [[credentialsId: 'qa-day-ruby-capybara', url: 'https://github.com/gokcesahinnn/web-test-automation-ruby-base-project.git']]])
+            }
+        }
+        stage('Running Test') {
+            steps {
+                sh """
+                bundle install
+                bundle exec parallel_cucumber -n ${params.ThreadCount.toInteger()} -o '-p parallel --tags "${TagName}" headless=${Headless} browser=${Browser}'
+                 """
+            }
+        }
+    }
+    post {
+        always {
+            allure([includeProperties: false,
+                    jdk              : '',
+                    properties       : [],
+                    reportBuildPolicy: 'ALWAYS',
+                    results          : [[path: 'output/allure-results']]])
+        }
+        success{
+            script{
+                slackSend(
+                        color: "#70FD01",
+                        message:":white_check_mark: *(<${env.JOB_URL}${BUILD_NUMBER}/allure|${reportName} Success Test Automation Report>)*\n\n"
+                )
+            }
+        }
+        failure{
+            script{
+                slackSend(
+                        color: "#FF0000",
+                        message:":white_check_mark: *(<${env.JOB_URL}${BUILD_NUMBER}/allure|${reportName} Failure Test Automation Report>)*\n\n"
+                )
+            }
+        }
+        aborted{
+            script{
+                slackSend(
+                        color: "#BCBCBC",
+                        message:":white_check_mark: *(<${env.JOB_URL}${BUILD_NUMBER}/allure|${reportName} Aborted Test Automation Report>)*\n\n"
+                )
+            }
+        }
+    }
+}
